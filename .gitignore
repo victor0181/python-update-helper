@@ -1,0 +1,28 @@
+# ---- 工具运行产物 ----
+# 导出的已装库清单因机器而异，不入库（程序会自动重建该目录）。
+清单/
+
+# pip.ini 的自动备份
+pip.ini.bak-*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 工作区私有数据 ----
+# 内含本机环境笔记，不对外公开。
+.workbuddy/

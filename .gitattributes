@@ -1,0 +1,31 @@
+# 换行符策略 —— 这个项目对换行符敏感，显式钉死，不依赖 core.autocrlf。
+#
+# 「一键配置.bat」必须保持纯 ASCII + CRLF：cmd.exe 按当前代码页逐字节读取 .bat，
+# 一旦被改成 LF 或混入非 ASCII 字符，行边界整体错位，会报
+# "'xx' is not recognized as an internal or external command"。
+# 所以这里强制 *.bat 在任何平台上检出时都是 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Python 源码统一 LF，避免"同一仓库混两种换行符"。
+*.py text eol=lf
+
+# 文本文件默认 LF。
+*.md   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.ini  text eol=lf
+
+# 无扩展名的文本文件（否则会被 core.autocrlf 影响）
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+LICENSE        text eol=lf
+
+# 二进制文件不要做任何转换。
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
+*.exe binary
