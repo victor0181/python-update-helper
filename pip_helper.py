@@ -19,6 +19,7 @@ Python 更新助手
 
 import argparse
 import configparser
+import glob
 import json
 import os
 import re
@@ -31,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 APP_NAME = "Python 更新助手"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2"
 
 HOME = Path(__file__).resolve().parent
 EXPORT_DIR = HOME / "清单"
@@ -459,9 +460,14 @@ def describe_interpreter(target):
     }
 
 
-def newest_pip_version():
-    """查官方最新的 pip 版本号，用来判断要不要升级。失败返回 None。"""
-    code, out = run([sys.executable, "-m", "pip", "index", "versions", "pip"], timeout=45)
+def newest_pip_version(python=None):
+    """查 pip 在索引上的最新版本号，只在预览模式里用来预告。失败返回 None。
+
+    要用「即将被升级的那个解释器」去查：pip 新版本对 Python 版本有支持下限，
+    拿工具自己的 Python 去问，给老解释器报的版本号可能是装不上的。
+    """
+    runner = python if python is not None else sys.executable
+    code, out = run([runner, "-m", "pip", "index", "versions", "pip"], timeout=45)
     if code == 0:
         m = re.search(r"Available versions:\s*([0-9][^\s,]*)", out)
         if m:
@@ -622,6 +628,37 @@ def _format_ini_entry(key, value):
     return [key + " ="] + ["\t" + p for p in parts]
 
 
+BACKUP_KEEP = 10  # 同一份 pip.ini 最多留多少个历史备份（够回退，也不会无限堆）
+
+
+def prune_backups(path, keep=BACKUP_KEEP):
+    """只保留最近的 keep 份 `.bak-时间戳`，返回清掉的数量。
+
+    备份名里带着 %Y%m%d-%H%M%S-%f，字典序就是时间序，不必去 stat。
+    备份是用户出事时唯一的退路，所以只在确实超量时才动，且逐份独立 try——
+    删不掉（被占用、只读）就留着，绝不让清理影响主流程。
+    """
+    if keep <= 0:
+        return 0
+    try:
+        pattern = glob.escape(str(path.parent / path.name)) + ".bak-*"
+        files = sorted(
+            (Path(p) for p in glob.glob(pattern) if os.path.isfile(p)),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+    except OSError:
+        return 0
+    removed = 0
+    for old in files[keep:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def _atomic_write_text(path, body, encoding, dry_run=False):
     """先备份、再同目录临时文件 + 原子替换，避免中断时留下半个 pip.ini。"""
     if dry_run:
@@ -635,6 +672,7 @@ def _atomic_write_text(path, body, encoding, dry_run=False):
             backup.write_bytes(path.read_bytes())
         except Exception as exc:
             raise OSError("无法备份原 pip 配置，已停止写入：%s" % exc) from exc
+        prune_backups(path)
     temp_path = path.with_name(path.name + ".tmp-" + str(os.getpid()))
     try:
         with open(str(temp_path), "w", encoding=encoding, newline="") as fh:
@@ -696,8 +734,11 @@ def rewrite_global_keys(path, updates, dry_run=False):
                 out.append(line)
             continue
         if line[:1] in (" ", "\t"):
-            # 多值键的续行：要么所属的键会被整体重写，要么它压根没被动过
-            if open_key is None:
+            # 多值键的缩进续行（pip 的 extra-index-url / find-links 都这么写）。
+            # 只有当"所属的键会被本函数重写或删除"时才能丢掉这行；
+            # 那个键要是压根没被动过（例如用户自己的 find-links），必须原样保留，
+            # 否则等于把用户配置里的一半值静默删掉。
+            if open_key is None or open_key not in updates:
                 out.append(line)
             continue
         if tail:
@@ -896,6 +937,8 @@ def parse_args(argv):
         parser.error("这些模式不能同时使用：" + ", ".join(active))
     if args.probe_only and (args.python or args.exclude):
         parser.error("--probe-only 不需要指定 Python 解释器")
+    if args.probe_only and (args.mirror or args.no_probe or args.trusted or args.config_file):
+        parser.error("--probe-only 只测速，不需要 --mirror / --no-probe / --trusted / --config-file")
     if args.restore and args.list_only:
         parser.error("--restore 不能与 --list-only 同时使用")
     if args.restore and args.upgrade_only:
@@ -1082,16 +1125,16 @@ def verify_effective(interpreters, expect_url, dry_run=False):
 
 def step_upgrade(args, interpreters):
     section("第 5 步 / 把 pip 升级到最新")
-    if args.list_only:
-        info("「只看已装库」模式下不动 pip，跳过。")
-        return True
     if args.no_upgrade:
         info("按参数跳过（--no-upgrade）。")
         return True
     success = True
-    latest = newest_pip_version()
-    if latest:
-        info("官方最新版本：" + latest)
+    if args.dry_run and interpreters:
+        # 预览时看不到 pip install 自己的输出，所以这里先预告一句；
+        # 正常执行时那句输出本来就有，不必每次都白花一次网络往返。
+        latest = newest_pip_version(interpreters[0]["path"])
+        if latest:
+            info("官方最新版本：" + latest)
 
     for item in interpreters:
         python = item["path"]
@@ -1314,6 +1357,9 @@ def main(argv=None):
     if not args.list_only and not args.no_config and not args.upgrade_only:
         anchor = interpreters[0]["path"] if interpreters else None
         ini_path = resolve_user_ini(anchor, args.config_file)
+        # 先设成失败：只要下面有任何一条路径没能真正写成功，
+        # 后面的 `if not configured` 就不会撞上未赋值的变量。
+        configured = False
         if args.restore:
             configured = step_configure(args, [], ini_path)
             expect_url = OFFICIAL

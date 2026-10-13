@@ -17,11 +17,16 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-# 版本号以命令行版为准，避免两处各写一份、日久不同步。
+# 版本号与镜像清单都以命令行版为准，避免两处各写一份、日久不同步
+# （镜像名一旦对不上，命令行版就认不出来，那一步会直接失败）。
 try:  # pragma: no cover - 同目录导入，正常都能成功
-    from pip_helper import APP_NAME, APP_VERSION
+    from pip_helper import APP_NAME, APP_VERSION, MIRRORS
 except Exception:  # noqa: BLE001
-    APP_NAME, APP_VERSION = "Python 更新助手", ""
+    # 真走到这里说明 pip_helper.py 已经不在旁边了，窗口本身也干不了活，
+    # 所以不给镜像兜底列表——宁可下拉框是空的，也不要第二份真源。
+    APP_NAME, APP_VERSION, MIRRORS = "Python 更新助手", "", []
+
+MIRROR_CHOICES = ("自动选择",) + tuple(name for name, _ in MIRRORS)
 
 
 BG = "#171a21"
@@ -214,7 +219,7 @@ class PipHelperWindow:
         self.mirror = tk.StringVar(value="自动选择")
         self.mirror_box = ttk.Combobox(
             mirror_top, textvariable=self.mirror, state="readonly", width=20,
-            values=("自动选择", "清华 TUNA", "阿里云", "腾讯云", "中科大"),
+            values=MIRROR_CHOICES,
         )
         self.mirror_box.pack(side="right", padx=(5, 0))
         status_row = ttk.Frame(mirror_panel, style="Panel.TFrame")
